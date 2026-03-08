@@ -1,0 +1,40 @@
+name: 식약처 크롤링 자동화
+
+on:
+  schedule:
+    # 매일 오전 9시 (KST = UTC+9 → UTC 00:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 수동 실행 허용 (모바일에서 버튼 클릭으로 실행 가능)
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 크롤링 실행
+        run: python croll_mfds_actions.py
+
+      - name: data.json 변경 여부 확인
+        id: check_changes
+        run: |
+          git diff --quiet data.json && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: data.json 커밋 및 푸시
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git commit -m "Auto-update data.json ($(date +'%Y-%m-%d %H:%M KST' -d '+9 hours'))"
+          git push
