@@ -1,0 +1,11 @@
+# 엑셀 및 타임스탬프 백업 파일
+crawling_results_*.xlsx
+crawling_results_*.json
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# OS
+.DS_Store

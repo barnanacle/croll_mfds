@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>식약처 공지사항 뷰어</title>
+  <meta name="description" content="식약처 지방청 및 관련 기관 공지사항을 한눈에 조회하는 서비스" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ── */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #161b26;
+      --surface2: #1e2535;
+      --border: rgba(255, 255, 255, .07);
+      --accent: #6366f1;
+      --accent2: #818cf8;
+      --green: #22c55e;
+      --orange: #f59e0b;
+      --red: #ef4444;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --radius: 14px;
+      --banner-h: 68px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Fixed Banner ── */
+    #banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: var(--banner-h);
+      background: rgba(13, 15, 20, .85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 10px;
+      z-index: 1000;
+      flex-wrap: nowrap;
+    }
+
+    #banner .logo {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent2);
+      white-space: nowrap;
+      margin-right: 12px;
+      letter-spacing: -.3px;
+    }
+
+    #banner .sep {
+      width: 1px;
+      height: 28px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .sort-btn {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      font-size: .8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all .18s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sort-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent2);
+      background: rgba(99, 102, 241, .1);
+    }
+
+    .sort-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    /* ── Source Dropdown ── */
+    #source-wrapper {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    #source-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      min-width: 200px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+      z-index: 9999;
+      overflow: hidden;
+      animation: fadeIn .15s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    #source-dropdown.open {
+      display: block;
+    }
+
+    .source-item {
+      padding: 9px 16px;
+      font-size: .82rem;
+      cursor: pointer;
+      color: var(--text);
+      transition: background .12s, color .12s;
+      white-space: nowrap;
+    }
+
+    .source-item:hover {
+      background: rgba(99, 102, 241, .12);
+      color: var(--accent2);
+    }
+
+    .source-item.selected {
+      color: var(--accent2);
+      font-weight: 600;
+    }
+
+    .source-item.all-item {
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    #searchBox {
+      margin-left: auto;
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      font-size: .8rem;
+      width: 200px;
+      outline: none;
+    }
+
+    #searchBox:focus {
+      border-color: var(--accent);
+    }
+
+    #searchBox::placeholder {
+      color: var(--muted);
+    }
+
+    #countBadge {
+      font-size: .75rem;
+      color: var(--muted);
+      white-space: nowrap;
+      padding-left: 8px;
+    }
+
+    /* ── Main Grid ── */
+    #main {
+      padding: calc(var(--banner-h) + 24px) 24px 48px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 18px;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: transform .18s, box-shadow .18s, border-color .18s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      border-radius: var(--radius) var(--radius) 0 0;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      opacity: 0;
+      transition: opacity .18s;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+      border-color: rgba(99, 102, 241, .3);
+    }
+
+    .card:hover::before {
+      opacity: 1;
+    }
+
+    .card.checked {
+      background: rgba(34, 197, 94, .08);
+      border-color: rgba(34, 197, 94, .3);
+    }
+
+    .card.checked::before {
+      background: linear-gradient(90deg, var(--green), #4ade80);
+      opacity: 1;
+    }
+
+    .card-check {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      position: relative;
+      transition: all .15s;
+    }
+
+    .card-check:hover {
+      border-color: var(--green);
+    }
+
+    .card-check:checked {
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .card-check:checked::after {
+      content: '\2713';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-size: .75rem;
+      font-weight: 700;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-title {
+      font-size: .95rem;
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .copy-btn {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: .85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+    }
+
+    .copy-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent2);
+      background: rgba(99, 102, 241, .1);
+    }
+
+    .copy-btn.copied {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(34, 197, 94, .1);
+    }
+
+    .meta-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 12px;
+      font-size: .73rem;
+      font-weight: 500;
+    }
+
+    .badge-source {
+      background: rgba(99, 102, 241, .15);
+      color: var(--accent2);
+      border: 1px solid rgba(99, 102, 241, .25);
+    }
+
+    .badge-date {
+      background: rgba(255, 255, 255, .05);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      font-size: .72rem;
+    }
+
+    .overview {
+      font-size: .82rem;
+      color: #94a3b8;
+      line-height: 1.65;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      border-left: 2px solid rgba(99, 102, 241, .3);
+      padding-left: 10px;
+    }
+
+    .overview.expanded {
+      -webkit-line-clamp: unset;
+    }
+
+    .toggle-btn {
+      font-size: .72rem;
+      color: var(--accent2);
+      background: none;
+      border: none;
+      cursor: pointer;
+      align-self: flex-start;
+      padding: 0;
+      margin-top: -6px;
+    }
+
+    .toggle-btn:hover {
+      text-decoration: underline;
+    }
+
+    .no-overview {
+      font-size: .78rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+    }
+
+    .link-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: .78rem;
+      color: var(--accent2);
+      text-decoration: none;
+      padding: 5px 11px;
+      border: 1px solid rgba(99, 102, 241, .3);
+      border-radius: 8px;
+      transition: all .15s;
+    }
+
+    .link-btn:hover {
+      background: rgba(99, 102, 241, .1);
+      border-color: var(--accent);
+    }
+
+    /* ── Loading / Empty ── */
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: var(--bg);
+      z-index: 2000;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #emptyMsg {
+      display: none;
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      #banner {
+        padding: 0 12px;
+        gap: 6px;
+        overflow-x: auto;
+      }
+
+      .sort-btn {
+        font-size: .72rem;
+        padding: 5px 10px;
+      }
+
+      #searchBox {
+        width: 130px;
+      }
+
+      #grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Loading -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <p style="color:var(--muted);font-size:.9rem">데이터 불러오는 중...</p>
+  </div>
+
+  <!-- Fixed Banner -->
+  <div id="banner">
+    <span class="logo">&#x1F3E5; 식약처 공지 뷰어</span>
+    <div class="sep"></div>
+
+    <button class="sort-btn active" data-sort="date-desc" id="btn-latest">&#x1F4C5; 최신순</button>
+    <button class="sort-btn" data-sort="date-asc" id="btn-oldest">&#x1F4C5; 오래된순</button>
+    <button class="sort-btn" data-sort="has-detail" id="btn-detail">&#x1F4DD; 상세내용 있음</button>
+
+    <!-- 구분별 드롭다운 -->
+    <div id="source-wrapper">
+      <button class="sort-btn" id="btn-source">&#x1F3E2; 구분별 &#x25BE;</button>
+      <div id="source-dropdown">
+        <div class="source-item all-item selected" data-src="">전체 보기</div>
+      </div>
+    </div>
+
+    <div class="sep"></div>
+    <input id="searchBox" placeholder="&#x1F50D; 검색..." type="text" autocomplete="off" />
+    <span id="countBadge">0건</span>
+    <div class="sep" style="margin-left:8px;"></div>
+    <span id="updateTime" style="font-size: .75rem; color: var(--muted); white-space: nowrap;">업데이트: 확인중...</span>
+  </div>
+
+  <!-- Main -->
+  <main id="main">
+    <div id="grid"></div>
+    <div id="emptyMsg">검색 결과가 없습니다.</div>
+  </main>
+
+  <script>
+    // ── Globals ──
+    let allData = [];
+    let currentSort = 'date-desc';
+    let currentQuery = '';
+    let currentSource = '';
+
+    // ── 체크 상태 관리 (localStorage) ──
+    const CHECKED_KEY = 'mfds_checked_links';
+    function getCheckedSet() {
+      try {
+        return new Set(JSON.parse(localStorage.getItem(CHECKED_KEY) || '[]'));
+      } catch { return new Set(); }
+    }
+    function saveCheckedSet(set) {
+      localStorage.setItem(CHECKED_KEY, JSON.stringify([...set]));
+    }
+    function toggleCheck(link) {
+      const set = getCheckedSet();
+      if (set.has(link)) { set.delete(link); } else { set.add(link); }
+      saveCheckedSet(set);
+      return set.has(link);
+    }
+
+    // ── Helpers ──
+    function hasDetail(item) {
+      const text = (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').trim();
+      return text.length > 0;
+    }
+
+    // ── Sort ──
+    function sortData(arr, mode) {
+      const clone = [...arr];
+      if (mode === 'date-desc') {
+        clone.sort((a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || ''));
+      } else if (mode === 'date-asc') {
+        clone.sort((a, b) => (a['\uB4F1\uB85D\uC77C'] || '').localeCompare(b['\uB4F1\uB85D\uC77C'] || ''));
+      } else if (mode === 'has-detail') {
+        return clone
+          .filter(item => hasDetail(item))
+          .sort((a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || ''));
+      }
+      return clone;
+    }
+
+    // ── Filter ──
+    function filterData(arr, q) {
+      let result = arr;
+      if (currentSource) {
+        result = result.filter(item => (item['\uAD6C\uBD84'] || '') === currentSource);
+      }
+      if (!q) return result;
+      const lower = q.toLowerCase();
+      return result.filter(item =>
+        (item['\uC81C\uBAA9'] || '').toLowerCase().includes(lower) ||
+        (item['\uAD6C\uBD84'] || '').toLowerCase().includes(lower) ||
+        (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').toLowerCase().includes(lower)
+      );
+    }
+
+    // ── Render ──
+    function cardHTML(item, idx) {
+      const title = (item['\uC81C\uBAA9'] || '').replace(/\n/g, ' ').trim();
+      const source = item['\uAD6C\uBD84'] || '';
+      const date = item['\uB4F1\uB85D\uC77C'] || '';
+      const link = item['URL'] || '#';
+      const detail = (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').trim();
+
+      const detailHTML = detail
+        ? `<div class="overview" id="ov-${idx}">${detail.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')}</div>
+       <button class="toggle-btn" onclick="toggleOv(${idx})">더보기 &#x25BE;</button>`
+        : `<p class="no-overview">상세내용 없음</p>`;
+
+      const isChecked = getCheckedSet().has(link);
+
+      return `
+<div class="card${isChecked ? ' checked' : ''}" id="card-${idx}" data-link="${link.replace(/"/g, '&quot;')}">
+  <div class="card-header">
+    <input type="checkbox" class="card-check" ${isChecked ? 'checked' : ''}
+           onchange="onCardCheck(${idx}, this)" title="확인 체크" />
+    <div class="card-title">${title}</div>
+    <button class="copy-btn" id="copy-${idx}" title="클립보드 복사" onclick="copyCard(${idx})">&#x1F4CB;</button>
+  </div>
+  <div class="meta-row">
+    <span class="badge badge-source">&#x1F3E2; ${source}</span>
+    <span class="badge badge-date">&#x1F4C5; ${date}</span>
+  </div>
+  ${detailHTML}
+  <div class="card-footer">
+    <a class="link-btn" href="${link}" target="_blank" rel="noopener">원문 바로가기 &#x2197;</a>
+  </div>
+</div>`;
+    }
+
+    function render() {
+      const filtered = filterData(allData, currentQuery);
+      const sorted = sortData(filtered, currentSort);
+      const grid = document.getElementById('grid');
+      const empty = document.getElementById('emptyMsg');
+      document.getElementById('countBadge').textContent = `${sorted.length}건`;
+
+      if (!sorted.length) {
+        grid.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      grid.innerHTML = '';
+      const CHUNK = 80;
+      let i = 0;
+      function renderChunk() {
+        const frag = document.createDocumentFragment();
+        const end = Math.min(i + CHUNK, sorted.length);
+        for (; i < end; i++) {
+          const div = document.createElement('div');
+          div.innerHTML = cardHTML(sorted[i], i);
+          frag.appendChild(div.firstElementChild);
+        }
+        grid.appendChild(frag);
+        if (i < sorted.length) requestAnimationFrame(renderChunk);
+      }
+      renderChunk();
+    }
+
+    // ── Interactions ──
+    function onCardCheck(idx, checkbox) {
+      const card = document.getElementById(`card-${idx}`);
+      const link = card?.dataset?.link || '';
+      if (!link) return;
+      const isNowChecked = toggleCheck(link);
+      card.classList.toggle('checked', isNowChecked);
+    }
+
+    function toggleOv(idx) {
+      const el = document.getElementById(`ov-${idx}`);
+      const isExp = el.classList.toggle('expanded');
+      el.nextElementSibling.textContent = isExp ? '접기 \u25B4' : '더보기 \u25BE';
+    }
+
+    function copyCard(idx) {
+      const card = document.getElementById(`card-${idx}`);
+      const title = card.querySelector('.card-title')?.textContent?.trim() || '';
+      const source = card.querySelector('.badge-source')?.textContent?.trim() || '';
+      const date = card.querySelector('.badge-date')?.textContent?.trim() || '';
+      const overviewEl = card.querySelector('.overview');
+      const detail = overviewEl ? overviewEl.innerText.trim() : '상세내용 없음';
+      const link = card.querySelector('.link-btn')?.href || '';
+
+      const text = `[${source}] ${title}\n등록일: ${date}\n링크: ${link}\n\n${detail}`;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById(`copy-${idx}`);
+        btn.textContent = '\u2705';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = '\uD83D\uDCCB'; btn.classList.remove('copied'); }, 1800);
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      });
+    }
+
+    // ── Sort Buttons ──
+    document.querySelectorAll('.sort-btn:not(#btn-source)').forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentSource = '';
+        document.querySelectorAll('.source-item').forEach(el => el.classList.remove('selected'));
+        document.querySelector('.source-item.all-item').classList.add('selected');
+
+        document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentSort = btn.dataset.sort;
+        render();
+      });
+    });
+
+    // ── Source Dropdown ──
+    const srcBtn = document.getElementById('btn-source');
+    const srcDrop = document.getElementById('source-dropdown');
+
+    srcBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      srcDrop.classList.toggle('open');
+    });
+
+    document.addEventListener('click', () => srcDrop.classList.remove('open'));
+    srcDrop.addEventListener('click', e => e.stopPropagation());
+
+    function buildSourceDropdown(data) {
+      const sources = [...new Set(data.map(d => d['\uAD6C\uBD84'] || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+      srcDrop.innerHTML = `<div class="source-item all-item selected" data-src="">전체 보기</div>`;
+      sources.forEach(src => {
+        const div = document.createElement('div');
+        div.className = 'source-item';
+        div.dataset.src = src;
+        div.textContent = src;
+        srcDrop.appendChild(div);
+      });
+
+      srcDrop.addEventListener('click', e => {
+        const item = e.target.closest('.source-item');
+        if (!item) return;
+        currentSource = item.dataset.src;
+
+        srcDrop.querySelectorAll('.source-item').forEach(el => el.classList.remove('selected'));
+        item.classList.add('selected');
+        srcDrop.classList.remove('open');
+
+        document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+        if (currentSource) {
+          srcBtn.classList.add('active');
+          srcBtn.textContent = `\uD83C\uDFE2 ${currentSource} \u25BE`;
+          currentSort = 'date-desc';
+        } else {
+          document.getElementById('btn-latest').classList.add('active');
+          srcBtn.textContent = '\uD83C\uDFE2 구분별 \u25BE';
+          currentSort = 'date-desc';
+        }
+        render();
+      });
+    }
+
+    // ── Search ──
+    let searchTimer;
+    document.getElementById('searchBox').addEventListener('input', e => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        currentQuery = e.target.value.trim();
+        render();
+      }, 280);
+    });
+
+    // ── Load Data ──
+    fetch('./data.json')
+      .then(r => r.json())
+      .then(payload => {
+        const lastUpdated = payload.last_updated;
+        if (lastUpdated) {
+          const formatted = lastUpdated.replace(/-/g, '.').slice(0, 16);
+          document.getElementById('updateTime').textContent = `업데이트: ${formatted}`;
+        } else {
+          document.getElementById('updateTime').textContent = `업데이트: 알 수 없음`;
+        }
+
+        allData = Array.isArray(payload) ? payload : (payload.data || []);
+        document.getElementById('loading').style.display = 'none';
+        buildSourceDropdown(allData);
+        render();
+      })
+      .catch(err => {
+        document.getElementById('loading').innerHTML =
+          `<p style="color:var(--red)">데이터 로드 실패: ${err.message}</p>`;
+      });
+  </script>
+</body>
+
+</html>
