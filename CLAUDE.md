@@ -158,6 +158,17 @@ urllib3           # 재시도 로직
 
 ### 2026-04-18
 
+#### 점검 (Claude Code Opus 4.7 기준 전체 코드 리뷰)
+
+- **크롤러 (`croll_mfds.py`)**: 정상 동작 확인
+  - 재시도 로직(3회, exponential backoff), 타임아웃(목록 15s/상세 10s), 요청 간격(0.5s) 모두 적절
+  - MFDS 9개 소스 셀렉터(`div.center_column > a.title`, `div.right_column`, `div.bv_cont`) 및 KCIA 셀렉터(`td.left > a.link`, `div.view_area`) 정상 파싱 확인
+  - 알려진 경미 이슈: `post_date.month in [current_month, last_month]` 월 비교만 수행 (연도 미체크) — 1월 ↔ 12월 경계에서 전년도 게시물 혼입 가능성, 실사용 영향 낮음
+- **프론트엔드 (`index.html`)**: 정상 동작 확인
+  - 카드 렌더링(청크 80), 정렬(최신/오래된/상세있음), 소스 드롭다운, 검색(280ms 디바운스), 체크 상태(localStorage), 복사 버튼 모두 정상
+
+#### 변경사항
+
 - **index.html**: 최신순 정렬 셔플 로직 변경 — 시드 기반 동일 날짜 그룹 셔플 → 오늘 기준 5일 이내 카드 랜덤 셔플
   - 오늘 날짜(`Date.now()`) 기준으로 `RECENT_WINDOW_DAYS = 5`일 이내 `등록일` 카드만 대상
   - `Math.random()` 기반 Fisher-Yates 셔플 — 새로고침마다 순서 달라짐 (비결정론적)
