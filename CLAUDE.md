@@ -156,11 +156,15 @@ urllib3           # 재시도 로직
 
 ## 변경 이력
 
+### 2026-04-18
+
+- **index.html**: 최신순 정렬 셔플 로직 변경 — 시드 기반 동일 날짜 그룹 셔플 → 오늘 기준 5일 이내 카드 랜덤 셔플
+  - 오늘 날짜(`Date.now()`) 기준으로 `RECENT_WINDOW_DAYS = 5`일 이내 `등록일` 카드만 대상
+  - `Math.random()` 기반 Fisher-Yates 셔플 — 새로고침마다 순서 달라짐 (비결정론적)
+  - 5일 초과 카드는 날짜 내림차순 유지, 최근 카드(셔플됨) 뒤에 배치
+  - 기존 `hashSeed()`, `seededRandom()`, `shuffleByDateGroup()` 제거 → `shuffleRecentCards()` 로 대체
+
 ### 2026-03-31
 
 - **crawl.yml**: 자동 크롤링 스케줄 변경 — KST 09:00 → KST 21:00 (`cron: '0 0 * * *'` → `'0 12 * * *'`)
-- **index.html**: 최신순 정렬 시 동일 날짜 카드 시드 기반 셔플 기능 추가
-  - `last_updated` 타임스탬프를 시드로 사용하여 크롤링마다 카드 배치가 달라짐
-  - 날짜 간 내림차순은 유지, 같은 날짜 그룹 내에서만 Fisher-Yates 셔플 적용
-  - 결정론적 셔플: 같은 `last_updated`이면 새로고침해도 동일 순서, 크롤링 실행 후 변경
-  - 관련 함수: `hashSeed()`, `seededRandom()`, `shuffleByDateGroup()`
+- **index.html**: 최신순 정렬 시 동일 날짜 카드 시드 기반 셔플 기능 추가 (이후 2026-04-18 로직 변경으로 대체됨)

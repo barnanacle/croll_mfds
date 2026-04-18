@@ -549,55 +549,42 @@
       return text.length > 0;
     }
 
-    // 날짜 문자열 기반 시드 해시 (매일 다른 셔플 결과)
-    function hashSeed(str) {
-      let h = 0;
-      for (let i = 0; i < str.length; i++) {
-        h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-      }
-      return Math.abs(h);
-    }
+    // 오늘 기준 5일 이내 카드는 새로고침마다 랜덤 셔플, 나머지는 날짜 내림차순 유지
+    const RECENT_WINDOW_DAYS = 5;
 
-    // 시드 기반 의사 난수 생성기
-    function seededRandom(seed) {
-      let s = seed;
-      return function () {
-        s = (s * 1664525 + 1013904223) & 0x7fffffff;
-        return s / 0x7fffffff;
-      };
-    }
+    function shuffleRecentCards(arr) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const cutoff = new Date(today);
+      cutoff.setDate(cutoff.getDate() - RECENT_WINDOW_DAYS);
 
-    // 같은 날짜 그룹 내에서 시드 기반 셔플
-    function shuffleByDateGroup(arr) {
-      const seed = hashSeed(lastUpdated || new Date().toISOString().slice(0, 10));
-      const rand = seededRandom(seed);
-
-      // 날짜별 그룹핑
-      const groups = new Map();
+      const recent = [];
+      const older = [];
       arr.forEach(item => {
-        const date = item['\uB4F1\uB85D\uC77C'] || '';
-        if (!groups.has(date)) groups.set(date, []);
-        groups.get(date).push(item);
+        const dateStr = item['\uB4F1\uB85D\uC77C'] || '';
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime()) && d >= cutoff) {
+          recent.push(item);
+        } else {
+          older.push(item);
+        }
       });
 
-      // 각 그룹 내부를 시드 기반 셔플 (Fisher-Yates)
-      for (const [, items] of groups) {
-        for (let i = items.length - 1; i > 0; i--) {
-          const j = Math.floor(rand() * (i + 1));
-          [items[i], items[j]] = [items[j], items[i]];
-        }
+      // Fisher-Yates 셔플 (Math.random — 새로고침마다 다른 순서)
+      for (let i = recent.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [recent[i], recent[j]] = [recent[j], recent[i]];
       }
 
-      // 날짜 내림차순으로 그룹 결합
-      const dates = [...groups.keys()].sort((a, b) => b.localeCompare(a));
-      return dates.flatMap(d => groups.get(d));
+      older.sort((a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || ''));
+      return [...recent, ...older];
     }
 
     // ── Sort ──
     function sortData(arr, mode) {
       const clone = [...arr];
       if (mode === 'date-desc') {
-        return shuffleByDateGroup(clone);
+        return shuffleRecentCards(clone);
       } else if (mode === 'date-asc') {
         clone.sort((a, b) => (a['\uB4F1\uB85D\uC77C'] || '').localeCompare(b['\uB4F1\uB85D\uC77C'] || ''));
       } else if (mode === 'has-detail') {
