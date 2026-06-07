@@ -544,6 +544,16 @@
     // ── Helpers ──
     let lastUpdated = '';
 
+    // HTML 이스케이프 (제목/출처/링크 등 외부 텍스트를 innerHTML에 넣기 전 처리)
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function hasDetail(item) {
       const text = (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').trim();
       return text.length > 0;
@@ -619,27 +629,27 @@
       const detail = (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').trim();
 
       const detailHTML = detail
-        ? `<div class="overview" id="ov-${idx}">${detail.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')}</div>
+        ? `<div class="overview" id="ov-${idx}">${esc(detail).replace(/\n/g, '<br/>')}</div>
        <button class="toggle-btn" onclick="toggleOv(${idx})">더보기 &#x25BE;</button>`
         : `<p class="no-overview">상세내용 없음</p>`;
 
       const isChecked = getCheckedSet().has(link);
 
       return `
-<div class="card${isChecked ? ' checked' : ''}" id="card-${idx}" data-link="${link.replace(/"/g, '&quot;')}">
+<div class="card${isChecked ? ' checked' : ''}" id="card-${idx}" data-link="${esc(link)}">
   <div class="card-header">
     <input type="checkbox" class="card-check" ${isChecked ? 'checked' : ''}
            onchange="onCardCheck(${idx}, this)" title="확인 체크" />
-    <div class="card-title">${title}</div>
+    <div class="card-title">${esc(title)}</div>
     <button class="copy-btn" id="copy-${idx}" title="클립보드 복사" onclick="copyCard(${idx})">&#x1F4CB;</button>
   </div>
   <div class="meta-row">
-    <span class="badge badge-source">&#x1F3E2; ${source}</span>
-    <span class="badge badge-date">&#x1F4C5; ${date}</span>
+    <span class="badge badge-source">&#x1F3E2; ${esc(source)}</span>
+    <span class="badge badge-date">&#x1F4C5; ${esc(date)}</span>
   </div>
   ${detailHTML}
   <div class="card-footer">
-    <a class="link-btn" href="${link}" target="_blank" rel="noopener">원문 바로가기 &#x2197;</a>
+    <a class="link-btn" href="${esc(link)}" target="_blank" rel="noopener">원문 바로가기 &#x2197;</a>
   </div>
 </div>`;
     }
@@ -786,11 +796,21 @@
       .then(r => r.json())
       .then(payload => {
         lastUpdated = payload.last_updated || '';
+        const updEl = document.getElementById('updateTime');
         if (lastUpdated) {
           const formatted = lastUpdated.replace(/-/g, '.').slice(0, 16);
-          document.getElementById('updateTime').textContent = `업데이트: ${formatted}`;
+          // 갱신 지연 감지: last_updated(KST) 날짜가 2일 이상 지났으면 경고 표시
+          const upd = new Date(lastUpdated.slice(0, 10) + 'T00:00:00+09:00');
+          const ageDays = Math.floor((Date.now() - upd.getTime()) / 86400000);
+          if (!isNaN(upd.getTime()) && ageDays >= 2) {
+            updEl.textContent = `⚠️ ${ageDays}일 전 업데이트 (${formatted}) — 갱신 지연 가능성`;
+            updEl.style.color = 'var(--orange)';
+            updEl.style.fontWeight = '600';
+          } else {
+            updEl.textContent = `업데이트: ${formatted}`;
+          }
         } else {
-          document.getElementById('updateTime').textContent = `업데이트: 알 수 없음`;
+          updEl.textContent = `업데이트: 알 수 없음`;
         }
 
         allData = Array.isArray(payload) ? payload : (payload.data || []);

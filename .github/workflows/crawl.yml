@@ -9,21 +9,30 @@ on:
         required: false
         default: '수동 크롤링'
 
-  # 자동 스케줄: 매일 한국시간 오전 9시 (UTC 00:00)
+  # 자동 스케줄: 매일 한국시간 오후 9시(21:00) = UTC 12:00
+  # (GitHub 스케줄은 best-effort라 실제 시작이 수십 분 지연될 수 있음)
   schedule:
     - cron: '0 12 * * *'
 
 permissions:
   contents: write
 
+# 동시 실행 방지(수동 트리거와 스케줄이 겹쳐 push가 충돌하는 것을 막음).
+# 진행 중인 실행은 취소하지 않고 대기시킨다(부분 결과 보존).
+concurrency:
+  group: mfds-crawl
+  cancel-in-progress: false
+
 jobs:
   crawl-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
 
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git pull --rebase가 안전하도록 전체 히스토리 확보
 
       - name: Python 설정
         uses: actions/setup-python@v5
@@ -37,7 +46,8 @@ jobs:
       - name: 크롤링 실행
         env:
           GITHUB_ACTIONS_CRAWL: 'true'
-        run: python croll_mfds.py
+          PYTHONUNBUFFERED: '1'
+        run: python -u croll_mfds.py
 
       - name: 변경사항 확인 및 커밋
         run: |
@@ -51,6 +61,8 @@ jobs:
           else
             TIMESTAMP=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')
             git commit -m "Update data.json (${TIMESTAMP})"
+            # 혹시 원격이 앞서 있으면 rebase 후 push (non-fast-forward 거절 방지)
+            git pull --rebase origin main
             git push
             echo "data.json 업데이트 완료 → Cloudflare Pages 배포 시작"
           fi
