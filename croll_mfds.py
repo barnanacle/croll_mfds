@@ -2,7 +2,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 import datetime
 import pandas as pd
 import re
@@ -61,6 +61,10 @@ food_drug_urls = [
 
 # 게시물을 저장할 리스트
 all_posts = []
+# URL 기준 전역 중복 제거용 집합(모든 소스 공통).
+# MFDS 지방청은 host(mfds.go.kr)는 같아도 게시판 path(m_824 vs m_841…)가 달라
+# 정규화 키가 소스 간 충돌하지 않음을 실데이터로 확인함(0건) → 전역 set이 안전.
+seen_urls = set()
 
 
 def _in_window(post_date, now):
@@ -68,6 +72,19 @@ def _in_window(post_date, now):
     기존 month-only 비교(post_date.month in [current, last])의 1월↔12월 경계 버그를 수정한다."""
     prev = now - datetime.timedelta(days=30)
     return (post_date.year, post_date.month) in {(now.year, now.month), (prev.year, prev.month)}
+
+
+def _norm_url(u):
+    """게시물 고유 식별자(MFDS=seq, KCIA=no) 기준으로 URL을 정규화(중복 제거용).
+    page/srch*/itm_seq*/ss 등은 네비게이션 노이즈이므로 제거하고, id가 없으면
+    쿼리를 버린 base path로 대체한다."""
+    if not u:
+        return ''
+    p = urlparse(u)
+    q = parse_qs(p.query)
+    ident = (q.get('seq', [None])[0]) or (q.get('no', [None])[0])
+    base = (p.scheme + '://' + p.netloc + p.path).lower().rstrip('/')
+    return base + '?' + ident if ident else base
 
 
 def get_detail_content(url):
@@ -106,6 +123,7 @@ def process_mfds(url, soup, source):
     dtime = 0.0
     dmax = 0.0
     skipped = 0
+    empty_skipped = 0
 
     for item in soup.select('ul > li'):
         title_tag = item.select_one('div.center_column > a.title')
@@ -122,7 +140,18 @@ def process_mfds(url, soup, source):
         if not _in_window(post_date, now) or not link:
             continue
 
+        # 빈 제목 행 스킵(상세요청·sleep 전에 차단 → 비용 0). 전용 카운터 사용.
+        if not title:
+            empty_skipped += 1
+            continue
+
         link = urljoin(url, link)
+        # URL 전역 중복 제거(공지 고정행이 일반 dated 행을 복제하는 케이스 제거)
+        nkey = _norm_url(link)
+        if not nkey or nkey in seen_urls:
+            continue
+        seen_urls.add(nkey)
+
         # 상세 내용 크롤링 (식약청 지방청, 공무원지침서, 민원인안내서인 경우)
         detail_content = ""
         want_detail = any(region in source for region in ['서울', '경인', '부산', '대전', '광주', '대구', '공무원지침서', '민원인안내서'])
@@ -147,6 +176,8 @@ def process_mfds(url, soup, source):
         count += 1
 
     tail = f", 마감초과 상세생략 {skipped}건" if skipped else ""
+    if empty_skipped:
+        tail += f", 빈제목 {empty_skipped}건"
     print(f"  → {source}: {count}건 (상세 {dtime:.1f}s, max {dmax:.1f}s{tail})", flush=True)
 
 
@@ -156,6 +187,7 @@ def process_kcia(url, soup, source):
     dtime = 0.0
     dmax = 0.0
     skipped = 0
+    empty_skipped = 0
 
     for item in soup.select('tbody > tr'):
         title_tag = item.select_one('td.left > a.link')
@@ -172,8 +204,19 @@ def process_kcia(url, soup, source):
         if not _in_window(post_date, now) or not link:
             continue
 
+        # 빈 제목 행 스킵(상세요청·sleep 전에 차단). 전용 카운터 사용.
+        if not title:
+            empty_skipped += 1
+            continue
+
         base_url = url.split('?')[0]
         link = urljoin(base_url, link)
+        # URL 전역 중복 제거
+        nkey = _norm_url(link)
+        if not nkey or nkey in seen_urls:
+            continue
+        seen_urls.add(nkey)
+
         # 상세 내용 크롤링
         detail_content = ""
         if over_deadline():
@@ -196,6 +239,8 @@ def process_kcia(url, soup, source):
         count += 1
 
     tail = f", 마감초과 상세생략 {skipped}건" if skipped else ""
+    if empty_skipped:
+        tail += f", 빈제목 {empty_skipped}건"
     print(f"  → {source}: {count}건 (상세 {dtime:.1f}s, max {dmax:.1f}s{tail})", flush=True)
 
 

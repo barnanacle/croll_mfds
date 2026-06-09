@@ -559,8 +559,9 @@
       return text.length > 0;
     }
 
-    // 오늘 기준 5일 이내 카드는 새로고침마다 랜덤 셔플, 나머지는 날짜 내림차순 유지
-    const RECENT_WINDOW_DAYS = 5;
+    // 최신순 3-tier 랭킹: 상세O+최근(셔플) → 상세O 과거 → 상세X(맨 뒤). 빈 제목은 로드시 이미 제거됨.
+    const RECENT_WINDOW_DAYS = 5;  // tier1 최근 창(일)
+    const RECENT_LIMIT = 24;       // tier1 셔플 풀 상한(picks가 정말 최신에 머물도록 bound)
 
     function shuffleRecentCards(arr) {
       const today = new Date();
@@ -568,26 +569,28 @@
       const cutoff = new Date(today);
       cutoff.setDate(cutoff.getDate() - RECENT_WINDOW_DAYS);
 
-      const recent = [];
-      const older = [];
+      const usefulRecent = [];  // tier 1: \uC0C1\uC138O + \uCD5C\uADFC
+      const usefulOlder = [];   // tier 2: \uC0C1\uC138O + \uADF8 \uC774\uC804
+      const noDetail = [];      // tier 3: \uC0C1\uC138X (\uB0A0\uC9DC \uBB34\uAD00, \uD56D\uC0C1 \uB9E8 \uB4A4)
       arr.forEach(item => {
-        const dateStr = item['\uB4F1\uB85D\uC77C'] || '';
-        const d = new Date(dateStr);
-        if (!isNaN(d.getTime()) && d >= cutoff) {
-          recent.push(item);
-        } else {
-          older.push(item);
-        }
+        if (!hasDetail(item)) { noDetail.push(item); return; }
+        const d = new Date(item['\uB4F1\uB85D\uC77C'] || '');
+        if (!isNaN(d.getTime()) && d >= cutoff) usefulRecent.push(item);
+        else usefulOlder.push(item);
       });
 
       // Fisher-Yates 셔플 (Math.random — 새로고침마다 다른 순서)
-      for (let i = recent.length - 1; i > 0; i--) {
+      const byDateDesc = (a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || '');
+      usefulRecent.sort(byDateDesc);
+      const pool = usefulRecent.slice(0, RECENT_LIMIT);   // \uC154\uD50C \uD480(\uCD5C\uC2E0 N\uAC1C)
+      const overflow = usefulRecent.slice(RECENT_LIMIT);  // \uCD08\uACFC\uBD84\uC740 tier2\uB85C \uAC15\uB4F1
+      for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [recent[i], recent[j]] = [recent[j], recent[i]];
+        [pool[i], pool[j]] = [pool[j], pool[i]];
       }
-
-      older.sort((a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || ''));
-      return [...recent, ...older];
+      const mid = [...overflow, ...usefulOlder].sort(byDateDesc);
+      noDetail.sort(byDateDesc);
+      return [...pool, ...mid, ...noDetail];
     }
 
     // ── Sort ──
@@ -813,7 +816,9 @@
           updEl.textContent = `업데이트: 알 수 없음`;
         }
 
-        allData = Array.isArray(payload) ? payload : (payload.data || []);
+        const rawData = Array.isArray(payload) ? payload : (payload.data || []);
+        // 방어적 필터: 제목이 빈 카드는 표시하지 않음(크롤러가 1차 제거하지만 stale data.json 대비)
+        allData = rawData.filter(item => ((item['제목'] || '').trim().length > 0));
         document.getElementById('loading').style.display = 'none';
         buildSourceDropdown(allData);
         render();
