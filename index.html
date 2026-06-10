@@ -354,6 +354,34 @@
       font-size: .72rem;
     }
 
+    /* 첨부파일 칩 */
+    .attach-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .att-chip {
+      display: inline-block;
+      max-width: 100%;
+      padding: 3px 9px;
+      border-radius: 12px;
+      font-size: .72rem;
+      color: var(--accent2);
+      background: rgba(99, 102, 241, .08);
+      border: 1px solid rgba(99, 102, 241, .2);
+      text-decoration: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: all .15s;
+    }
+
+    .att-chip:hover {
+      background: rgba(99, 102, 241, .16);
+      border-color: var(--accent);
+    }
+
     .overview {
       font-size: .82rem;
       color: #94a3b8;
@@ -559,9 +587,81 @@
       return text.length > 0;
     }
 
-    // 최신순 3-tier 랭킹: 상세O+최근(셔플) → 상세O 과거 → 상세X(맨 뒤). 빈 제목은 로드시 이미 제거됨.
+    // 최신순 3-tier 랭킹: 상세O+최근(관심도 가중 셔플) → 상세O 과거 → 상세X(맨 뒤). 빈 제목은 로드시 이미 제거됨.
     const RECENT_WINDOW_DAYS = 5;  // tier1 최근 창(일)
     const RECENT_LIMIT = 24;       // tier1 셔플 풀 상한(picks가 정말 최신에 머물도록 bound)
+
+    // ── 관심도 점수 (tier1 가중 셔플용) ──
+    // 운영자(행정사)의 잠재 고객 = 화장품·식품·의료기기 영업자(제조업·책임판매업·수입·표시광고 담당).
+    // 그들에게 영향이 큰 주제(점검·처분·개정·인허가·수출 등) 가점, 홍보성 소식 감점.
+    const HIGH_KEYWORDS = [
+      '점검', '감시', '단속', '행정처분', '회수', '판매중지', '과대광고', '허위',
+      '의무', '개정', '시행', '인허가', '등록', '신고', '가이드라인', '지원사업',
+      '교육', '제출자료', 'FAQ', '수출', '중국', 'NMPA', 'FDA', 'GMP',
+      '기능성', '맞춤형', '표시', '광고'
+    ];
+    // 오탐 주의: '성과'는 '안전성과 유효성', '인사'는 '개인사업자'에 걸리므로 더 좁은 형태 사용
+    const LOW_KEYWORDS = ['뉴스레터', '청년탐험단', '설문조사', '인사발령', '채용', '국정과제', '성과보고', '홍보'];
+
+    const W_TITLE_HIT = 3;    // 제목 키워드 1개당 +3 (제목 적중 = 상세의 3배 가치)
+    const W_DETAIL_HIT = 1;   // 상세내용(앞 500자) 키워드 1개당 +1
+    const W_LOW_TITLE = -4;   // 홍보성 키워드가 제목에 있으면 강한 감점
+    const W_LOW_DETAIL = -1;  // 상세에 있으면 약한 감점
+    const W_ATTACH = 5;       // 첨부파일 있음 +5 (숏츠 소스 풍부)
+    const RICH_MAX = 8;       // 상세 길이 가점 상한 (250자당 +1, 최대 +8)
+
+    function scoreCard(item) {
+      const title = (item['제목'] || '').toLowerCase();
+      const detailFull = (item['상세내용'] || '');
+      const detailHead = detailFull.slice(0, 500).toLowerCase();
+      let score = 0;
+
+      // 키워드: 존재 여부당 1회만 가점(출현 횟수 무시 → 한 단어 도배 방지)
+      for (const kw of HIGH_KEYWORDS) {
+        const k = kw.toLowerCase();
+        if (title.includes(k)) score += W_TITLE_HIT;
+        if (detailHead.includes(k)) score += W_DETAIL_HIT;
+      }
+      for (const kw of LOW_KEYWORDS) {
+        const k = kw.toLowerCase();
+        if (title.includes(k)) score += W_LOW_TITLE;
+        if (detailHead.includes(k)) score += W_LOW_DETAIL;
+      }
+
+      // 상세 길이(풍부함): 본문+첨부 추출텍스트가 길수록 숏츠 재료가 많음
+      score += Math.min(Math.round(detailFull.length / 250), RICH_MAX);
+
+      // 첨부파일 보너스 (필드 없는 과거 data.json에서도 안전)
+      const files = item['첨부파일'];
+      if (Array.isArray(files) && files.length > 0) score += W_ATTACH;
+
+      // 최근성 미세 가점: 오늘 +5 … 5일 전 +0 (tier1 창 내 신선도 타이브레이크)
+      const d = new Date(item['등록일'] || '');
+      if (!isNaN(d.getTime())) {
+        const ageDays = Math.floor((Date.now() - d.getTime()) / 86400000);
+        score += Math.max(RECENT_WINDOW_DAYS - Math.max(ageDays, 0), 0);
+      }
+      return score;
+    }
+
+    // 점수 가중 룰렛 추출(비복원): 남은 카드 중 점수에 비례한 확률로 다음 자리를 뽑는다.
+    // → 고관심 카드가 앞에 올 확률이 높지만 순서는 새로고침마다 달라짐(다양성 유지).
+    // 풀 ≤ RECENT_LIMIT(24)이므로 O(n²) 비용 무시 가능.
+    function weightedShuffle(items) {
+      const rest = items.map(it => ({ it, w: Math.max(scoreCard(it), 1) }));  // 최소 가중 1 → 저점수도 항상 추첨 기회
+      const out = [];
+      while (rest.length > 0) {
+        const total = rest.reduce((sum, x) => sum + x.w, 0);
+        let r = Math.random() * total;
+        let pick = rest.length - 1;  // 부동소수 잔차 방어: 기본값은 마지막 항목
+        for (let i = 0; i < rest.length; i++) {
+          r -= rest[i].w;
+          if (r < 0) { pick = i; break; }
+        }
+        out.push(rest.splice(pick, 1)[0].it);
+      }
+      return out;
+    }
 
     function shuffleRecentCards(arr) {
       const today = new Date();
@@ -579,15 +679,10 @@
         else usefulOlder.push(item);
       });
 
-      // Fisher-Yates 셔플 (Math.random — 새로고침마다 다른 순서)
       const byDateDesc = (a, b) => (b['\uB4F1\uB85D\uC77C'] || '').localeCompare(a['\uB4F1\uB85D\uC77C'] || '');
       usefulRecent.sort(byDateDesc);
-      const pool = usefulRecent.slice(0, RECENT_LIMIT);   // \uC154\uD50C \uD480(\uCD5C\uC2E0 N\uAC1C)
+      const pool = weightedShuffle(usefulRecent.slice(0, RECENT_LIMIT));  // \uC154\uD50C \uD480(\uCD5C\uC2E0 N\uAC1C)\uC744 \uAD00\uC2EC\uB3C4 \uAC00\uC911 \uB8F0\uB81B\uC73C\uB85C \uBC30\uCE58
       const overflow = usefulRecent.slice(RECENT_LIMIT);  // \uCD08\uACFC\uBD84\uC740 tier2\uB85C \uAC15\uB4F1
-      for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
-      }
       const mid = [...overflow, ...usefulOlder].sort(byDateDesc);
       noDetail.sort(byDateDesc);
       return [...pool, ...mid, ...noDetail];
@@ -631,6 +726,20 @@
       const link = item['URL'] || '#';
       const detail = (item['\uC0C1\uC138\uB0B4\uC6A9'] || '').trim();
 
+      // \uCCA8\uBD80\uD30C\uC77C \uCE69: \uD06C\uB864\uB7EC\uAC00 \uCC44\uC6B0\uB294 '\uCCA8\uBD80\uD30C\uC77C' = [{\uC774\uB984, URL}] (\uC808\uB300 URL).
+      // \uD544\uB4DC\uAC00 \uC5C6\uB294 \uACFC\uAC70 data.json\uC5D0\uC11C\uB3C4 \uC548\uC804(\uBE48 \uBC30\uC5F4 \u2192 \uCE69 \uC5C6\uC74C).
+      const files = Array.isArray(item['\uCCA8\uBD80\uD30C\uC77C']) ? item['\uCCA8\uBD80\uD30C\uC77C'].slice(0, 8) : [];
+      const chips = files.map(f => {
+        const nm = String((f && f['\uC774\uB984']) || '').trim();
+        const fu = String((f && f['URL']) || '').trim();
+        if (!nm || !fu) return '';
+        const short = nm.length > 30 ? nm.slice(0, 29) + '\u2026' : nm;  // \uC6D0\uBCF8\uC744 \uC790\uB978 \uB4A4 esc (\uC5D4\uD2F0\uD2F0 \uC808\uB2E8 \uBC29\uC9C0)
+        return /^https?:\/\//i.test(fu)
+          ? `<a class="att-chip" href="${esc(fu)}" target="_blank" rel="noopener" title="${esc(nm)}">&#x1F4CE; ${esc(short)}</a>`
+          : `<span class="att-chip" title="${esc(nm)}">&#x1F4CE; ${esc(short)}</span>`;
+      }).join('');
+      const attachHTML = chips ? `<div class="attach-row">${chips}</div>` : '';
+
       const detailHTML = detail
         ? `<div class="overview" id="ov-${idx}">${esc(detail).replace(/\n/g, '<br/>')}</div>
        <button class="toggle-btn" onclick="toggleOv(${idx})">더보기 &#x25BE;</button>`
@@ -650,6 +759,7 @@
     <span class="badge badge-source">&#x1F3E2; ${esc(source)}</span>
     <span class="badge badge-date">&#x1F4C5; ${esc(date)}</span>
   </div>
+  ${attachHTML}
   ${detailHTML}
   <div class="card-footer">
     <a class="link-btn" href="${esc(link)}" target="_blank" rel="noopener">원문 바로가기 &#x2197;</a>
@@ -710,8 +820,12 @@
       const overviewEl = card.querySelector('.overview');
       const detail = overviewEl ? overviewEl.innerText.trim() : '상세내용 없음';
       const link = card.querySelector('.link-btn')?.href || '';
+      // 첨부파일명: 칩의 title 속성(전체 파일명, cardHTML에서 항상 설정)에서 수집
+      const attNames = [...card.querySelectorAll('.att-chip')]
+        .map(a => (a.getAttribute('title') || '').trim()).filter(Boolean);
+      const attLine = attNames.length ? `\n첨부파일: ${attNames.join('; ')}` : '';
 
-      const text = `[${source}] ${title}\n등록일: ${date}\n링크: ${link}\n\n${detail}`;
+      const text = `[${source}] ${title}\n등록일: ${date}\n링크: ${link}${attLine}\n\n${detail}`;
       navigator.clipboard.writeText(text).then(() => {
         const btn = document.getElementById(`copy-${idx}`);
         btn.textContent = '\u2705';

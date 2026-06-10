@@ -11,6 +11,20 @@ import json
 import time  # 딜레이를 위한 time 모듈 추가
 import subprocess
 import os
+import zipfile
+from io import BytesIO
+from html import unescape
+
+# 첨부 텍스트 추출용 선택 의존성 — 미설치 시 해당 형식 추출만 건너뜀(fail-soft).
+# (requirements.txt에 포함되지만, 구버전 로컬 venv에서도 크롤 본체는 절대 죽지 않게 가드)
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+try:
+    import olefile
+except Exception:
+    olefile = None
 
 # ── KST(한국시간) 헬퍼 ──
 # GitHub Actions 러너는 UTC이므로, 사용자에게 보이는 시각/날짜 필터는 KST 기준으로 통일한다.
@@ -23,6 +37,13 @@ def now_kst():
 DETAIL_DEADLINE_SEC = 360
 LIST_TIMEOUT = (5, 12)    # (connect, read) 목록 페이지
 DETAIL_TIMEOUT = (5, 8)   # (connect, read) 상세 페이지
+
+# ── 첨부파일 수집/추출 상한 ──
+ATTACH_LIST_MAX = 5                 # 게시물당 첨부 목록(이름+URL) 최대 개수
+ATTACH_EXTRACT_MAX = 2              # 게시물당 텍스트 추출 시도 최대 개수(PDF 우선)
+ATTACH_TEXT_CAP = 1200              # 첨부 1건당 추출 텍스트 최대 길이(자)
+ATTACH_SIZE_CAP = 8 * 1024 * 1024   # 첨부 다운로드 상한(8MB)
+ATTACH_SLEEP = 0.45                 # 첨부 다운로드 후 politeness 딜레이(초)
 _START = time.monotonic()
 def over_deadline():
     return (time.monotonic() - _START) > DETAIL_DEADLINE_SEC
@@ -65,12 +86,15 @@ all_posts = []
 # MFDS 지방청은 host(mfds.go.kr)는 같아도 게시판 path(m_824 vs m_841…)가 달라
 # 정규화 키가 소스 간 충돌하지 않음을 실데이터로 확인함(0건) → 전역 set이 안전.
 seen_urls = set()
+# 첨부파일 수집 통계(전역 진단용 — 실행 말미에 1줄 출력)
+attach_stats = {'listed': 0, 'extracted': 0}
 
 
 def _in_window(post_date, now):
-    """이번 달 + 지난 달 게시물만 통과(연도 인식).
-    기존 month-only 비교(post_date.month in [current, last])의 1월↔12월 경계 버그를 수정한다."""
-    prev = now - datetime.timedelta(days=30)
+    """이번 달 + 지난 달 게시물만 통과(연도 인식, 달력 기준).
+    now-30일 근사는 31일이 긴 달 말일(예: 5/31)에 지난달이 통째로 빠지고,
+    3/1~3/2에는 2월 대신 1월이 잡히는 경계 버그가 있어 달력 계산으로 교체."""
+    prev = now.replace(day=1) - datetime.timedelta(days=1)  # 지난달 말일
     return (post_date.year, post_date.month) in {(now.year, now.month), (prev.year, prev.month)}
 
 
@@ -87,9 +111,122 @@ def _norm_url(u):
     return base + '?' + ident if ident else base
 
 
+def collect_attachments(soup, page_url, source):
+    """상세페이지 soup에서 첨부파일 목록 전체를 수집한다.
+    returns [{'이름': 파일명(확장자 포함), 'URL': 절대 다운로드 URL}, ...] (전체 — 상한 적용은 호출부에서)
+    실패해도 빈 리스트 반환(fail-soft) — 본문 수집에 영향 없음."""
+    out = []
+    try:
+        if 'mfds.go.kr' in page_url:
+            # 검증된 마크업: div.bv_file_box > ul.bbs_file_view_list > li
+            #   > div.bbs_file_cont > strong = 파일명 / a.bbs_icon_filedown href = ./down.do?...(상대)
+            for li in soup.select('div.bv_file_box ul.bbs_file_view_list li'):
+                name_tag = li.select_one('div.bbs_file_cont > strong')
+                link_tag = li.select_one('a.bbs_icon_filedown')
+                name = name_tag.get_text(strip=True) if name_tag else ''
+                href = link_tag.get('href') if link_tag else None
+                if not (name and href):
+                    continue
+                out.append({'이름': name, 'URL': urljoin(page_url, href)})
+        elif 'kcia.or.kr' in page_url:
+            # 검증된 마크업: div.attach_box > ul.attach_list, a 텍스트 = 파일명,
+            #   href = /inc/down.php?dir=BOARD&file_name=...&rename=<urlencoded 파일명>
+            for link_tag in soup.select('div.attach_box ul.attach_list a'):
+                name = link_tag.get_text(strip=True)
+                href = link_tag.get('href')
+                if not (name and href):
+                    continue
+                out.append({'이름': name, 'URL': urljoin(page_url, href)})
+    except Exception as e:
+        print(f"  [attach] 목록 파싱 실패 ({source}) {page_url} - {type(e).__name__}", flush=True)
+    return out
+
+
+def _attach_ext(filename):
+    return os.path.splitext(filename.lower().strip())[1]
+
+
+def _pick_extract_targets(attachments):
+    """텍스트 추출 대상 선정: PDF 우선, 그다음 HWP/HWPX(각각 등장 순서 유지), 최대 ATTACH_EXTRACT_MAX건."""
+    pdfs = [a for a in attachments if _attach_ext(a['이름']) == '.pdf']
+    hwps = [a for a in attachments if _attach_ext(a['이름']) in ('.hwp', '.hwpx')]
+    return (pdfs + hwps)[:ATTACH_EXTRACT_MAX]
+
+
+def _hwpx_text_from_zip(data):
+    """HWPX(zip) 바이트에서 텍스트 추출: Preview/PrvText.txt 우선, 없으면 첫 Contents/section*.xml 태그 제거."""
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        names = zf.namelist()
+        prv = next((n for n in names if n.lower().endswith('preview/prvtext.txt')), None)
+        if prv:
+            return zf.read(prv).decode('utf-8-sig', errors='ignore')
+        sec = sorted(n for n in names if re.fullmatch(r'Contents/section\d+\.xml', n))
+        if sec:
+            xml = zf.read(sec[0]).decode('utf-8', errors='ignore')
+            return unescape(re.sub(r'<[^>]+>', ' ', xml))
+    return ''
+
+
+def extract_attachment_text(url, filename):
+    """첨부 1건을 스트리밍 다운로드(8MB 상한)해 텍스트를 추출한다(최대 ATTACH_TEXT_CAP자).
+    지원: .pdf(pypdf 앞 4페이지) / .hwp(olefile PrvText, UTF-16-LE) / .hwpx(zip PrvText 또는 section xml).
+    그 외 확장자(PNG/JPG/ZIP/XLSX 등)와 모든 예외는 '' 반환(fail-soft) — 실행을 절대 중단시키지 않는다."""
+    ext = _attach_ext(filename)
+    if ext not in ('.pdf', '.hwp', '.hwpx'):
+        return ''
+    if ext == '.pdf' and PdfReader is None:
+        return ''
+    if ext == '.hwp' and olefile is None:
+        return ''
+    try:
+        # 스트리밍 다운로드: Content-Length 사전 차단 + iter_content 누적 8MB/시간예산 차단
+        with session.get(url, stream=True, timeout=DETAIL_TIMEOUT) as r:
+            r.raise_for_status()
+            cl = r.headers.get('Content-Length')
+            if cl and cl.isdigit() and int(cl) > ATTACH_SIZE_CAP:
+                print(f"  [attach] 크기 초과 스킵 {filename[:40]} ({int(cl) // 1048576}MB)", flush=True)
+                return ''
+            chunks = []
+            size = 0
+            for chunk in r.iter_content(chunk_size=65536):
+                size += len(chunk)
+                if size > ATTACH_SIZE_CAP:
+                    print(f"  [attach] 8MB 초과 다운로드 중단 {filename[:40]}", flush=True)
+                    return ''
+                if over_deadline():
+                    print(f"  [attach] 시간예산 초과 다운로드 중단 {filename[:40]}", flush=True)
+                    return ''
+                chunks.append(chunk)
+        data = b''.join(chunks)
+
+        text = ''
+        if ext == '.pdf':
+            reader = PdfReader(BytesIO(data))
+            text = '\n'.join((page.extract_text() or '') for page in reader.pages[:4])
+        elif ext == '.hwp':
+            if data[:4] == b'PK\x03\x04':
+                text = _hwpx_text_from_zip(data)  # 확장자만 .hwp인 zip(HWPX) 방어
+            else:
+                ole = olefile.OleFileIO(BytesIO(data))
+                try:
+                    if ole.exists('PrvText'):
+                        text = ole.openstream('PrvText').read().decode('utf-16-le', errors='ignore')
+                finally:
+                    ole.close()
+        elif ext == '.hwpx':
+            text = _hwpx_text_from_zip(data)
+
+        text = re.sub(r'\s+', ' ', text.replace('\x00', ' ')).strip()
+        return text[:ATTACH_TEXT_CAP]
+    except Exception as e:
+        print(f"  [attach] 추출 실패 {filename[:40]} - {type(e).__name__}: {str(e)[:50]}", flush=True)
+        return ''
+
+
 def get_detail_content(url):
     """
-    게시글의 상세 내용을 크롤링하는 함수
+    게시글의 상세 내용 + 첨부파일을 크롤링하는 함수.
+    returns (상세내용 텍스트(첨부 추출 텍스트 포함), 첨부파일 [{'이름','URL'}] 목록)
     """
     try:
         response = session.get(url, timeout=DETAIL_TIMEOUT)
@@ -103,18 +240,41 @@ def get_detail_content(url):
         elif "kcia.or.kr" in url:
             content_div = soup.find('div', class_='view_area')
         else:
-            return ""
+            return "", []
 
+        content = ""
         if content_div:
             # 모든 텍스트 추출 (줄바꿈 유지)
             content = content_div.get_text(separator='\n', strip=True)
             # 연속된 빈 줄 제거
-            content = re.sub(r'\n\s*\n', '\n', content)
-            return content.strip()
-        return ""
+            content = re.sub(r'\n\s*\n', '\n', content).strip()
+
+        # 첨부파일 전체 목록 수집(이미 받은 soup 재사용 → 추가 페이지 요청 없음)
+        attachments_all = collect_attachments(soup, url, urlparse(url).netloc)
+
+        # 첨부 텍스트 추출: 전체 목록에서 대상 선정(PDF→HWP/HWPX, 최대 ATTACH_EXTRACT_MAX건),
+        # 시간예산(over_deadline) 공유. 예산 초과 시 '조용히' 중단 —
+        # skipped(마감초과 상세생략) 카운터는 CI 진단 전용이므로 오염 금지.
+        for att in _pick_extract_targets(attachments_all):
+            if over_deadline():
+                break
+            att_text = extract_attachment_text(att['URL'], att['이름'])
+            time.sleep(ATTACH_SLEEP)  # 첨부 다운로드 politeness 딜레이
+            if att_text:
+                attach_stats['extracted'] += 1
+                content += f"\n\n[첨부: {att['이름']}]\n{att_text}"
+
+        # 저장용 목록: 추출형식(.pdf/.hwp/.hwpx)을 앞에 배치한 뒤 상한 적용
+        # (이미지가 5개 이상 선행해도 추출된 문서가 목록에서 잘리지 않도록)
+        ext_first = [a for a in attachments_all if _attach_ext(a['이름']) in ('.pdf', '.hwp', '.hwpx')]
+        others = [a for a in attachments_all if a not in ext_first]
+        attachments = (ext_first + others)[:ATTACH_LIST_MAX]
+        attach_stats['listed'] += len(attachments)
+
+        return content.strip(), attachments
     except Exception as e:
         print(f"  [detail] 실패 {url} - {type(e).__name__}: {str(e)[:60]}", flush=True)
-        return ""
+        return "", []
 
 
 def process_mfds(url, soup, source):
@@ -154,13 +314,14 @@ def process_mfds(url, soup, source):
 
         # 상세 내용 크롤링 (식약청 지방청, 공무원지침서, 민원인안내서인 경우)
         detail_content = ""
+        attachments = []
         want_detail = any(region in source for region in ['서울', '경인', '부산', '대전', '광주', '대구', '공무원지침서', '민원인안내서'])
         if want_detail:
             if over_deadline():
                 skipped += 1  # 시간예산 초과: 상세는 생략하되 목록 정보는 보존
             else:
                 t = time.monotonic()
-                detail_content = get_detail_content(link)
+                detail_content, attachments = get_detail_content(link)
                 el = time.monotonic() - t
                 dtime += el
                 dmax = max(dmax, el)
@@ -171,7 +332,8 @@ def process_mfds(url, soup, source):
             '제목': title,
             'URL': link,
             '등록일': date_str,
-            '상세내용': detail_content
+            '상세내용': detail_content,
+            '첨부파일': attachments
         })
         count += 1
 
@@ -219,11 +381,12 @@ def process_kcia(url, soup, source):
 
         # 상세 내용 크롤링
         detail_content = ""
+        attachments = []
         if over_deadline():
             skipped += 1
         else:
             t = time.monotonic()
-            detail_content = get_detail_content(link)
+            detail_content, attachments = get_detail_content(link)
             el = time.monotonic() - t
             dtime += el
             dmax = max(dmax, el)
@@ -234,7 +397,8 @@ def process_kcia(url, soup, source):
             '제목': title,
             'URL': link,
             '등록일': date_str,
-            '상세내용': detail_content
+            '상세내용': detail_content,
+            '첨부파일': attachments
         })
         count += 1
 
@@ -273,10 +437,12 @@ for site in food_drug_urls:
     except Exception as e:
         print(f"  [list] {source} 실패 {time.monotonic()-t:.1f}s {type(e).__name__}: {str(e)[:80]}", flush=True)
 
+print(f"\n첨부파일: 목록 {attach_stats['listed']}건 / 텍스트 추출 {attach_stats['extracted']}건", flush=True)
+
 # 데이터프레임 생성 및 열 순서 지정
 df = pd.DataFrame(all_posts)
 if not df.empty:
-    df = df[['구분', '제목', '등록일', 'URL', '상세내용']]  # 상세내용 열 포함
+    df = df[['구분', '제목', '등록일', 'URL', '상세내용', '첨부파일']]  # 상세내용·첨부파일 열 포함
     # 등록일 기준으로 내림차순 정렬
     df['등록일'] = pd.to_datetime(df['등록일'])  # 문자열을 datetime 형식으로 변환
     df = df.sort_values('등록일', ascending=False)  # 내림차순 정렬

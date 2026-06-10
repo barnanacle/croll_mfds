@@ -72,6 +72,7 @@ croll_MFDS/
 - **타임아웃**: 목록 페이지 (connect 5s, read 12s), 상세 페이지 (connect 5s, read 8s)
 - **시간 예산**: 상세 수집 누적 360초 초과 시 남은 상세는 생략하고 목록 정보만 저장 (부분 갱신 → CI 타임아웃 방지)
 - **데이터 안전가드**: 크롤 결과가 비었거나 기존 data.json의 50% 미만이면 덮어쓰지 않음 (크롤 실패 시 라이브 페이지 보존)
+- **첨부파일**: 게시물당 목록 최대 5개(이름+절대URL) 수집, 그중 2개까지 텍스트 추출(PDF→pypdf 앞4페이지 / HWP→olefile PrvText / HWPX→zip PrvText, 각 1200자) 후 `상세내용`에 `[첨부: 파일명]` 구분자로 append. 파일당 8MB 다운로드 캡, 0.45s 딜레이, 360s 시간예산 공유, 실패 시 해당 파일만 skip(fail-soft)
 
 ---
 
@@ -86,7 +87,8 @@ croll_MFDS/
       "제목": "게시물 제목",
       "등록일": "2026-03-05",
       "URL": "https://www.mfds.go.kr/...",
-      "상세내용": "게시물 본문 텍스트 (없을 수 있음)"
+      "상세내용": "게시물 본문 + 첨부 추출 텍스트('[첨부: 파일명]' 구분자로 append, 없을 수 있음)",
+      "첨부파일": [{"이름": "파일명.pdf", "URL": "https://...(절대 URL)"}]
     }
   ]
 }
@@ -94,6 +96,7 @@ croll_MFDS/
 
 - `등록일` 기준 내림차순 정렬
 - 한글 필드명 사용 (프론트엔드와 직접 바인딩)
+- `첨부파일` 키는 2026-06-10 이후 생성분에만 존재 — 프론트엔드는 `Array.isArray` 가드로 결측 허용(안전가드 발동 시 옛 data.json이 유지될 수 있음)
 
 ---
 
@@ -103,6 +106,8 @@ croll_MFDS/
 - **디자인**: 다크모드, Pretendard 폰트, glassmorphism 카드
 - **기능**:
   - 정렬: 최신순 / 오래된순 / 상세내용 있는 것 우선
+  - 최신순 = 3-tier 랭킹: ①상세O+최근 5일(관심도 점수 가중 룰렛 — 새로고침마다 변동) ②상세O 과거(등록일 desc) ③상세X 맨 뒤. 관심도 점수 = HIGH/LOW 키워드(제목 3배 가중) + 상세 길이 + 첨부 보너스 + 최근성
+  - 첨부파일 칩: 카드에 📎 칩(새 탭, https만 링크), 복사 텍스트에 `첨부파일:` 줄 포함
   - 소스 필터: 드롭다운으로 출처별 필터링
   - 검색: 실시간 검색 (280ms 디바운스), 제목·출처·상세내용 대상
   - 체크 표시: localStorage(`mfds_checked_links`)에 읽음 상태 저장
@@ -142,6 +147,8 @@ requests          # HTTP 요청
 beautifulsoup4    # HTML 파싱
 pandas            # 데이터 정렬/변환
 urllib3           # 재시도 로직
+pypdf             # PDF 첨부 텍스트 추출 (pure-python)
+olefile           # HWP(v5) PrvText 추출 (pure-python)
 ```
 
 ---
@@ -151,13 +158,32 @@ urllib3           # 재시도 로직
 - **정적 사이트**: Cloudflare Pages는 빌드 과정 없이 정적 파일만 서빙 (wrangler.toml 없음)
 - **데이터 갱신 주기**: 하루 1회 (KST 21:00), 필요시 GitHub에서 수동 트리거 가능
 - **크롤링 범위**: 현재 월 + 직전 월만 수집하므로 data.json은 항상 최근 2개월 데이터
-- **한글 필드명**: data.json의 키가 한글 (`구분`, `제목`, `등록일`, `URL`, `상세내용`) — 프론트엔드에서 직접 참조
+- **한글 필드명**: data.json의 키가 한글 (`구분`, `제목`, `등록일`, `URL`, `상세내용`, `첨부파일`) — 프론트엔드에서 직접 참조
 - **MFDS 사이트 구조 변경 시**: `process_mfds()`의 CSS 셀렉터(`div.center_column > a.title`, `div.right_column`, `div.bv_cont`) 확인 필요
 - **KCIA 사이트 구조 변경 시**: `process_kcia()`의 CSS 셀렉터(`td.left > a.link`, `div.view_area`) 확인 필요
 
 ---
 
 ## 변경 이력
+
+### 2026-06-10
+
+#### 첨부파일 텍스트 추출 + 관심도 가중 최신순 (Claude Code Fable 5, ultracode 다중에이전트 검증)
+
+**목표**: ① 상세내용을 첨부파일(PDF/HWP/HWPX) 본문까지 확장해 숏츠 소재 풍부화, ② '최신순'을 최신 + 잠재고객(화장품·식품·의료기기 영업자) 유용성 + 대중 관심도 기준으로 고도화.
+
+**크롤러 (croll_mfds.py)**:
+- 첨부 수집: 실측 셀렉터(MFDS `div.bv_file_box ul.bbs_file_view_list li`의 `strong`+`a.bbs_icon_filedown`, KCIA `div.attach_box ul.attach_list a`) → `첨부파일` 필드([{이름,URL}], 추출형식 우선 5개)
+- 텍스트 추출: PDF(pypdf 앞4페이지)·HWP(olefile PrvText)·HWPX(zip PrvText/section xml), 게시물당 2건·각 1200자, `상세내용`에 `[첨부: 파일명]`로 append. 8MB 캡(Content-Length 사전차단+스트리밍 누적차단+시간예산 중단), 0.45s politeness, 전부 fail-soft
+- `_in_window` 달력 버그 수정: now-30일 근사 → `now.replace(day=1)-1일` (3년 스윕 27일 오차 실증: 31일에 지난달 통째 누락, 3/1~2에 1월 오인)
+- requirements.txt += pypdf, olefile (pure-python, CI 변경 불필요)
+
+**프론트엔드 (index.html)**:
+- 관심도 점수 `scoreCard()`: HIGH 키워드(점검·감시·행정처분·회수·과대광고·개정·인허가·가이드라인·수출·NMPA·FDA·GMP 등, 제목 적중 3배) − LOW 키워드(뉴스레터·청년탐험단·설문조사 등, 오탐 방지형: 성과보고·인사발령) + 상세길이(최대 +8) + 첨부 보너스(+5) + 최근성(+0~5)
+- tier1 풀을 Fisher-Yates → **점수 가중 룰렛 비복원 샘플링**으로 교체: 고관심 카드가 앞설 확률↑, 새로고침마다 순서 변동(다양성 유지, 측정 r≈-0.985)
+- 첨부 칩(📎 새 탭, https 스킴만 링크, esc 이스케이프) + 복사 텍스트에 `첨부파일:` 줄. `첨부파일` 키 결측(옛 data.json) 안전
+
+**검증**: 로컬 풀크롤 51건 — 첨부 목록 122건·텍스트 추출 54건, 상세있음 40→43(첨부로 구제 3건), 8MB 캡이 10/54/58/136MB PDF 차단 확인, data.json 190KB, 빈제목·중복 0, 안전가드 통과. node 단위검증: 상위점수=정기감시·과대광고사례집·GMP교육 / 하위=뉴스레터(-5), 가중셔플 순열 보존.
 
 ### 2026-06-09
 
