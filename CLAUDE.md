@@ -31,6 +31,18 @@ GitHub Actions (매일 KST 21:00)
 
 ---
 
+## Codex/Claude 교대 작업 규칙
+
+이 저장소의 프로젝트 설명과 운영 규칙은 `CLAUDE.md`를 기준 문서(source of truth)로 유지한다. Codex용 `AGENTS.md`는 이 문서를 읽도록 안내하는 얇은 진입점이며, 프로젝트 세부 내용을 중복해서 늘리지 않는다.
+
+1. **작업 시작 전 동기화**: `git fetch origin` 후 `git status --short --branch`로 현재 브랜치와 ahead/behind 상태를 확인한다. `main`이 `origin/main`보다 뒤처져 있으면 코드 수정 전에 `git merge --ff-only origin/main` 또는 동등한 fast-forward 방식으로 먼저 맞춘다.
+2. **브랜치 분리**: 기능 수정과 UI/크롤러 변경은 `codex/<topic>` 또는 `claude/<topic>` 같은 작업 브랜치에서 진행한다. `main` 직접 수정은 사용자가 명시적으로 요청한 긴급 수정이나 자동 크롤 커밋 처리에 한정한다.
+3. **자동 데이터 커밋 주의**: `data.json`과 `crawl_log.txt`는 GitHub Actions가 매일 갱신한다. 코드 변경 커밋에 이 두 파일의 우발적 로컬 크롤 결과를 섞지 말고, 데이터 갱신이 필요한 작업일 때만 의도적으로 포함한다.
+4. **배포 직전 재확인**: `main`에 병합하거나 push하기 직전에 다시 `git fetch origin`과 `git status --short --branch`를 확인한다. 원격에 새 자동 크롤 커밋이 생겼다면 먼저 rebase/fast-forward 후 push한다.
+5. **핸드오프 기록**: 작업 종료 메시지에는 브랜치, 변경 파일, 검증 명령, 배포 여부, 남은 확인사항을 간단히 남긴다. 다른 에이전트가 이어받을 때 같은 조사를 반복하지 않게 하기 위함이다.
+
+---
+
 ## 파일 구조
 
 ```
@@ -44,7 +56,8 @@ croll_MFDS/
 ├── crawl_log.txt          # 크롤링 실행 로그 (자동 append)
 ├── requirements.txt       # Python 의존성
 ├── .gitignore
-└── CLAUDE.md              # 이 파일
+├── CLAUDE.md              # 프로젝트 기준 문서
+└── AGENTS.md              # Codex용 진입점 (CLAUDE.md 참조)
 ```
 
 ---
