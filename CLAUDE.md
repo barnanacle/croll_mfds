@@ -13,7 +13,7 @@
 ## 아키텍처
 
 ```
-GitHub Actions (매일 KST 21:00)
+GitHub Actions (매일 KST 05:00)
   → croll_mfds.py 실행 (Python 3.12)
   → data.json 생성
   → git commit & push
@@ -23,7 +23,7 @@ GitHub Actions (매일 KST 21:00)
 
 ### 핵심 흐름
 
-1. **크롤링**: GitHub Actions가 cron 스케줄(`0 12 * * *`, UTC 12:00 = KST 21:00)로 `croll_mfds.py` 실행
+1. **크롤링**: GitHub Actions가 cron 스케줄(`0 20 * * *`, UTC 20:00 = KST 05:00)로 `croll_mfds.py` 실행
 2. **데이터 저장**: 크롤링 결과를 `data.json`에 JSON 형식으로 저장
 3. **자동 커밋**: 변경사항이 있을 때만 `data.json`, `crawl_log.txt`를 커밋 & 푸시
 4. **배포**: main 브랜치에 push되면 Cloudflare Pages가 자동으로 정적 사이트 배포
@@ -137,7 +137,7 @@ croll_MFDS/
 
 | 항목 | 설정 |
 |------|------|
-| 자동 실행 | 매일 UTC 12:00 (KST 21:00) |
+| 자동 실행 | 매일 UTC 20:00 (KST 05:00) |
 | 수동 실행 | workflow_dispatch (GitHub 웹/모바일 앱) |
 | Python | 3.12 (pip 캐시 활성화) |
 | 타임아웃 | 25분 (크롤러 자체 시간예산 360초로 조기 종료) |
@@ -169,7 +169,7 @@ olefile           # HWP(v5) PrvText 추출 (pure-python)
 ## 개발 참고사항
 
 - **정적 사이트**: Cloudflare Pages는 빌드 과정 없이 정적 파일만 서빙 (wrangler.toml 없음)
-- **데이터 갱신 주기**: 하루 1회 (KST 21:00), 필요시 GitHub에서 수동 트리거 가능
+- **데이터 갱신 주기**: 하루 1회 (KST 05:00), 필요시 GitHub에서 수동 트리거 가능
 - **크롤링 범위**: 현재 월 + 직전 월만 수집하므로 data.json은 항상 최근 2개월 데이터
 - **한글 필드명**: data.json의 키가 한글 (`구분`, `제목`, `등록일`, `URL`, `상세내용`, `첨부파일`) — 프론트엔드에서 직접 참조
 - **MFDS 사이트 구조 변경 시**: `process_mfds()`의 CSS 셀렉터(`div.center_column > a.title`, `div.right_column`, `div.bv_cont`) 확인 필요
@@ -178,6 +178,10 @@ olefile           # HWP(v5) PrvText 추출 (pure-python)
 ---
 
 ## 변경 이력
+
+### 2026-07-09
+
+- **crawl.yml**: 자동 크롤링 스케줄 변경 — KST 21:00 → KST 05:00 (`cron: '0 12 * * *'` → `'0 20 * * *'`)
 
 ### 2026-06-10
 

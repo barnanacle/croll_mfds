@@ -9,10 +9,10 @@ on:
         required: false
         default: '수동 크롤링'
 
-  # 자동 스케줄: 매일 한국시간 오후 9시(21:00) = UTC 12:00
+  # 자동 스케줄: 매일 한국시간 오전 5시(05:00) = UTC 20:00
   # (GitHub 스케줄은 best-effort라 실제 시작이 수십 분 지연될 수 있음)
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 20 * * *'
 
 permissions:
   contents: write
