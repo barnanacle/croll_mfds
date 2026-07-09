@@ -60,9 +60,20 @@ jobs:
             echo "변경사항 없음 - 커밋 스킵"
           else
             TIMESTAMP=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')
-            git commit -m "Update data.json (${TIMESTAMP})"
+            if git diff --staged --quiet -- data.json; then
+              DATA_CHANGED=false
+              echo "::warning::data.json 변경 없음 - 안전가드 발동 또는 기존 데이터와 동일"
+              git commit -m "Record crawl log (${TIMESTAMP})"
+            else
+              DATA_CHANGED=true
+              git commit -m "Update data.json (${TIMESTAMP})"
+            fi
             # 혹시 원격이 앞서 있으면 rebase 후 push (non-fast-forward 거절 방지)
             git pull --rebase origin main
             git push
-            echo "data.json 업데이트 완료 → Cloudflare Pages 배포 시작"
+            if [ "$DATA_CHANGED" = "true" ]; then
+              echo "data.json 업데이트 완료 → Cloudflare Pages 배포 시작"
+            else
+              echo "data.json 미갱신 - crawl_log만 기록됨"
+            fi
           fi

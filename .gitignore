@@ -6,6 +6,7 @@ crawling_results_*.json
 __pycache__/
 *.pyc
 .env
+.venv/
 
 # OS
 .DS_Store
