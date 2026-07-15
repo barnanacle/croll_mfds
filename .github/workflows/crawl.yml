@@ -1,7 +1,18 @@
 name: MFDS 크롤링 및 배포
 
+# ── IP 추첨(draw) 아키텍처 ─────────────────────────────────────────────────
+# mfds.go.kr가 GitHub Actions(Azure) egress IP를 간헐 차단한다(TCP connect 단계).
+# GitHub-hosted 잡(job) 1개 = 새 러너 = 새 IP 추첨. 같은 잡 안에서 스텝을 재실행해도
+# IP가 그대로라 무의미하다. 따라서:
+#   ① 하루 3개 스케줄 창 × ② 창마다 "1차 시도 → (미갱신 시에만) 2차 시도" 잡 체인
+#   = 하루 최대 6회 독립 IP 추첨. 실측 차단률(crawl_log 기준)은 ~55-65%이고 Azure IP 풀
+#   상관관계로 추첨이 완전 독립은 아니므로, 기대치는 "월 1-3일 지연, 수 시간 내 자가복구"
+#   수준(기존: 최대 5일 연속 정지). 첫 2-4주 attempt2 실행 빈도로 실제 수치를 보정할 것.
+# data.json 갱신을 push까지 완료한 시도는 체인을 즉시 중단한다(창당 시도 상한 2회 고정).
+# 차단된 시도는 TCP 연결 자체가 열리지 않아 MFDS에 아무 부하도 주지 않는다.
+
 on:
-  # 수동 트리거 (GitHub 모바일 앱에서 실행 가능)
+  # 수동 트리거 (GitHub 모바일 앱에서 실행 가능) — 수동 실행도 동일한 2차 시도 체인을 탄다
   workflow_dispatch:
     inputs:
       reason:
@@ -9,30 +20,53 @@ on:
         required: false
         default: '수동 크롤링'
 
-  # 자동 스케줄: 매일 한국시간 오전 5시(05:00) = UTC 20:00
-  # (GitHub 스케줄은 best-effort라 실제 시작이 수십 분 지연될 수 있음)
+  # UTC 크론 (KST = UTC+9). GitHub 스케줄은 best-effort — 실제 시작이 최대 ~1시간 지연될
+  # 수 있고, 정각(:00)은 혼잡으로 지연이 특히 크므로 오프셋 분(17/47)을 사용한다.
   schedule:
-    - cron: '0 20 * * *'
+    - cron: '17 20 * * *'   # 05:17 KST — 아침 창: 전일 게시물 수집 (기존 05:00 KST 창 계승)
+    - cron: '17 4 * * *'    # 13:17 KST — 점심 창: 당일 오전 게시물 수집
+    - cron: '47 10 * * *'   # 19:47 KST — 저녁 창: 업무시간(09~18 KST) 종료 후 당일 전체분.
+                            #   최악 +1h 지연 + 2회 시도(~14분)여도 ≈21:00 KST 완료
+                            #   → seoryu.com의 21:50 KST 일일 sync 전에 반영된다.
 
 permissions:
   contents: write
 
 # 동시 실행 방지(수동 트리거와 스케줄이 겹쳐 push가 충돌하는 것을 막음).
 # 진행 중인 실행은 취소하지 않고 대기시킨다(부분 결과 보존).
+# 락은 런 전체(1차+2차 시도)가 점유한다 — 창 간격이 최소 6.5시간이라 겹칠 일은 없다.
 concurrency:
   group: mfds-crawl
   cancel-in-progress: false
 
 jobs:
-  crawl-and-deploy:
+  # ── 1차 시도: IP 추첨 #1 ──────────────────────────────────────────────
+  attempt1:
+    name: 크롤 1차 시도
     runs-on: ubuntu-latest
     timeout-minutes: 25
-
+    # refreshed: 이 시도가 data.json 갱신 커밋을 origin/main에 push까지 완료했는가.
+    # 'true'는 push 성공 "이후"에만 기록된다(commit 스텝 참조). push 실패 = 라이브 미반영
+    # = 체인 계속. 잡이 실패하면 output이 빈 값일 수 있으나, 빈 값 != 'true' → 2차 실행(fail-open).
+    outputs:
+      refreshed: ${{ steps.commit.outputs.refreshed }}
     steps:
-      - name: 저장소 체크아웃
+      - name: 저장소 체크아웃 (main 최신)
         uses: actions/checkout@v4
         with:
+          ref: main        # 트리거 시점 SHA가 아니라 "잡 시작 시점"의 origin/main 팁을 체크아웃
           fetch-depth: 0   # git pull --rebase가 안전하도록 전체 히스토리 확보
+
+      # crawl_log.txt는 매 시도가 EOF에 한 줄씩 append한다. 이전 시도의 push가 이미
+      # origin/main에 들어간 상태에서 낡은 트리 위에 크롤하면, 커밋 후 rebase가 EOF 충돌로
+      # 반드시 깨진다. → 크롤 "이전에" 원격 최신으로 강제 동기화한다.
+      # (1차 시도에선 사실상 no-op, 2차 시도에선 1차의 "Record crawl log" 커밋을
+      #  베이스로 흡수하는 핵심 안전장치. 두 잡의 스텝을 동일하게 유지하기 위해 양쪽에 둔다.)
+      - name: origin/main 강제 동기화 (crawl_log 충돌 방지)
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+          echo "크롤 기준 커밋: $(git log -1 --oneline)"
 
       - name: Python 설정
         uses: actions/setup-python@v5
@@ -50,7 +84,13 @@ jobs:
         run: python -u croll_mfds.py
 
       - name: 변경사항 확인 및 커밋
+        id: commit
         run: |
+          # 기본값 false를 가장 먼저 기록 — 이후 어느 지점에서 스텝이 실패해도 신호는
+          # 'false'(또는 잡 실패로 빈 값)로 남아 2차 시도가 열린다. 'true'로 체인을 멈추는
+          # 경로는 아래 "push 성공 이후" 한 곳뿐이다.
+          echo "refreshed=false" >> "$GITHUB_OUTPUT"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -70,8 +110,96 @@ jobs:
             fi
             # 혹시 원격이 앞서 있으면 rebase 후 push (non-fast-forward 거절 방지)
             git pull --rebase origin main
-            git push
+            git push origin main
+            # refreshed=true는 push "성공 이후"에만 기록한다.
+            #  - push 전에 기록하면: push 실패(=라이브 미반영) 시에도 체인이 멈춰 그날 창을 잃는다.
+            #  - push 후에 기록하면: 최악의 경우도 "이미 갱신됐는데 한 번 더 크롤"
+            #    (상한 2회 이내, MFDS 정상 수집 1회 추가)로 안전하게 수렴한다.
             if [ "$DATA_CHANGED" = "true" ]; then
+              echo "refreshed=true" >> "$GITHUB_OUTPUT"
+              echo "data.json 업데이트 완료 → Cloudflare Pages 배포 시작"
+            else
+              echo "data.json 미갱신 - crawl_log만 기록됨"
+            fi
+          fi
+
+  # ── 2차 시도: IP 추첨 #2 — 1차가 data.json을 갱신하지 못했을 때만 실행 ──────
+  # 아래 스텝들은 attempt1과 100% 동일하게 유지할 것(달라도 되는 곳은 needs/if/name뿐).
+  # GitHub Actions는 YAML 앵커를 지원하지 않아 부득이 복제한다.
+  attempt2:
+    name: 크롤 2차 시도 (1차 미갱신 시)
+    needs: attempt1
+    # if 해부 — 이 식이 틀리면 재시도가 "조용히" 비활성화되므로 그대로 유지할 것:
+    #  - !cancelled(): 상태검사 함수. 상태검사 함수가 하나도 없으면 GitHub이 암묵적으로
+    #    success()를 AND로 붙여, 1차 잡이 실패(크롤러 예외 등)하면 2차가 통째로 skip된다.
+    #    always()가 아닌 !cancelled()인 이유: 사용자가 런을 취소했으면 2차도 돌면 안 된다.
+    #  - != 'true': 긍정값 'true'일 때만 체인 중단. 1차가 실패하면 output이 빈 문자열('')일 수
+    #    있는데 '' != 'true' → 2차 실행(fail-open). (== 'false' 비교는 빈 값에서 skip되는 함정)
+    if: ${{ !cancelled() && needs.attempt1.outputs.refreshed != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      refreshed: ${{ steps.commit.outputs.refreshed }}
+    steps:
+      - name: 재시도 사유 기록
+        run: |
+          echo "1차 시도 result: ${{ needs.attempt1.result }}"
+          echo "1차 시도 refreshed output: '${{ needs.attempt1.outputs.refreshed }}' (빈 값 = 잡 실패로 output 유실)"
+
+      - name: 저장소 체크아웃 (main 최신)
+        uses: actions/checkout@v4
+        with:
+          ref: main        # 1차 시도가 push한 "Record crawl log" 커밋까지 포함한 최신 main
+          fetch-depth: 0
+
+      - name: origin/main 강제 동기화 (crawl_log 충돌 방지)
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+          echo "크롤 기준 커밋: $(git log -1 --oneline)"
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 크롤링 실행
+        env:
+          GITHUB_ACTIONS_CRAWL: 'true'
+          PYTHONUNBUFFERED: '1'
+        run: python -u croll_mfds.py
+
+      - name: 변경사항 확인 및 커밋
+        id: commit
+        run: |
+          echo "refreshed=false" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data.json crawl_log.txt
+
+          if git diff --staged --quiet; then
+            echo "변경사항 없음 - 커밋 스킵"
+          else
+            TIMESTAMP=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')
+            if git diff --staged --quiet -- data.json; then
+              DATA_CHANGED=false
+              echo "::warning::data.json 변경 없음 - 안전가드 발동 또는 기존 데이터와 동일"
+              git commit -m "Record crawl log (${TIMESTAMP})"
+            else
+              DATA_CHANGED=true
+              git commit -m "Update data.json (${TIMESTAMP})"
+            fi
+            # 혹시 원격이 앞서 있으면 rebase 후 push (non-fast-forward 거절 방지)
+            git pull --rebase origin main
+            git push origin main
+            if [ "$DATA_CHANGED" = "true" ]; then
+              echo "refreshed=true" >> "$GITHUB_OUTPUT"
               echo "data.json 업데이트 완료 → Cloudflare Pages 배포 시작"
             else
               echo "data.json 미갱신 - crawl_log만 기록됨"

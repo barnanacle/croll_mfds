@@ -137,11 +137,12 @@ croll_MFDS/
 
 | 항목 | 설정 |
 |------|------|
-| 자동 실행 | 매일 UTC 20:00 (KST 05:00) |
-| 수동 실행 | workflow_dispatch (GitHub 웹/모바일 앱) |
+| 자동 실행 | **매일 3회** — KST 05:17 / 13:17 / 19:47 (UTC `17 20` / `17 4` / `47 10`) |
+| 시도 체인 | 창마다 **attempt1 → (data.json 미갱신 시에만) attempt2** — 잡마다 새 러너 = 새 IP 추첨, 하루 최대 6회. 게이트: `if: !cancelled() && needs.attempt1.outputs.refreshed != 'true'` (fail-open) |
+| 수동 실행 | workflow_dispatch (GitHub 웹/모바일 앱) — 동일한 2단 체인 작동, 항상 main 기준 |
 | Python | 3.12 (pip 캐시 활성화) |
-| 타임아웃 | 25분 (크롤러 자체 시간예산 360초로 조기 종료) |
-| 동시성 | `concurrency: mfds-crawl` (중복 실행 방지, 진행 중 미취소) |
+| 타임아웃 | 잡당 25분 (크롤러 자체 시간예산 360초로 조기 종료) |
+| 동시성 | `concurrency: mfds-crawl` (중복 실행 방지, 진행 중 미취소) — 락은 런(1차+2차) 전체가 점유 |
 | 커밋 사용자 | github-actions[bot] |
 | 커밋 대상 | data.json, crawl_log.txt |
 | 환경변수 | `GITHUB_ACTIONS_CRAWL=true` (로컬 git push 스킵용) |
@@ -169,7 +170,8 @@ olefile           # HWP(v5) PrvText 추출 (pure-python)
 ## 개발 참고사항
 
 - **정적 사이트**: Cloudflare Pages는 빌드 과정 없이 정적 파일만 서빙 (wrangler.toml 없음)
-- **데이터 갱신 주기**: 하루 1회 (KST 05:00), 필요시 GitHub에서 수동 트리거 가능
+- **데이터 갱신 주기**: 하루 최대 3회 (KST 05:17/13:17/19:47, 창마다 최대 2회 IP 추첨), 필요시 GitHub에서 수동 트리거 가능
+- **전일 차단 폴백 런북**: ① GitHub 앱/웹 → Actions → "MFDS 크롤링 및 배포" → Run workflow(= 새 IP 추첨 2회). ② 그래도 막히면 로컬(한국 IP): `cd /Users/ryu/Antigravity/croll_MFDS && git switch main && git fetch origin && git merge --ff-only origin/main && python3 croll_mfds.py` (로컬 실행은 스크립트가 직접 commit+push)
 - **크롤링 범위**: 현재 월 + 직전 월만 수집하므로 data.json은 항상 최근 2개월 데이터
 - **한글 필드명**: data.json의 키가 한글 (`구분`, `제목`, `등록일`, `URL`, `상세내용`, `첨부파일`) — 프론트엔드에서 직접 참조
 - **MFDS 사이트 구조 변경 시**: `process_mfds()`의 CSS 셀렉터(`div.center_column > a.title`, `div.right_column`, `div.bv_cont`) 확인 필요
@@ -178,6 +180,23 @@ olefile           # HWP(v5) PrvText 추출 (pure-python)
 ---
 
 ## 변경 이력
+
+### 2026-07-15
+
+#### 갱신 지연 재발(7/14~15) 복구 + 다중 IP 추첨 구조 도입 (Claude Code Fable 5, ultracode 설계·적대검증)
+
+**증상/원인**: 라이브가 7/13 06:02에 고정. crawl_log 확인 결과 7/14·7/15 연속 안전가드 발동(신규 6건 = KCIA만) = **MFDS의 Azure IP 차단 스트릭 재발**. 하루 1회 스케줄 = 하루 1회 IP 추첨이라 나쁜 IP를 뽑으면 그날 통째 정지가 구조적 약점. 7월 실측 차단률(스케줄 런 기준) ~55-65%.
+
+**즉시 복구**: 로컬(한국 IP) 크롤 55건/9소스 → push(`51d14db`) → 라이브 7/15 12:36 복구.
+
+**구조 개선 (crawl.yml 전면 재설계)**:
+- **하루 3개 스케줄 창**(KST 05:17/13:17/19:47, 정각 혼잡 회피 오프셋 분) × **창마다 2단 시도 체인**(attempt1 → 미갱신 시에만 attempt2) = 하루 최대 6회 독립 IP 추첨. 저녁 창은 최악 드리프트에도 seoryu 21:50 sync 전에 완료되도록 배치.
+- 핵심 메커니즘: 잡(job) 단위 재시도만이 새 러너(=새 IP)를 받음. `refreshed` output은 **push 성공 이후에만 'true'** 기록(실패 시 체인 계속), 게이트는 `!cancelled() && needs.attempt1.outputs.refreshed != 'true'`(1차 크래시 시 output 빈 값 → fail-open으로 2차 실행). 두 잡 모두 크롤 전 `checkout ref:main` + `git reset --hard origin/main`으로 crawl_log(EOF append) rebase 충돌 방지.
+- 기대치: "월 1-3일 지연, 수 시간 내 자가복구" 수준(기존: 최대 5일 연속 정지). Azure IP 풀 상관관계로 추첨이 완전 독립은 아님 — 첫 2-4주 attempt2 실행 빈도로 보정.
+- 검증: actionlint 0 오류(설계·검증 에이전트가 독립적으로 각각 재현 + 로컬 재확인), 4개 시나리오 시뮬레이션(1차차단→2차성공 / 1차크래시 / 양쪽차단 / 1차성공→2차skip) 전부 의도대로.
+- 부수 효과: 갱신 최대 3회/일(정오·저녁 창이 당일 게시물 당일 반영), Cloudflare 배포 최대 ~6회/일(무료 한도 내), bot 커밋 증가(교대 규칙의 pull-first로 흡수).
+
+**주의(회귀 방지)**: attempt2의 `if:` 식에서 `!cancelled()` 제거, `refreshed=true`를 push 앞으로 이동, 크롤 전 hard-sync 제거 — 셋 중 무엇이든 건드리면 재시도가 조용히 죽는다. 잡 이름이 `crawl-and-deploy` → `attempt1`/`attempt2`로 변경됨(뱃지·스크립트에서 옛 이름 참조 시 갱신 필요).
 
 ### 2026-07-09
 
