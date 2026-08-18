@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-08-18 13:56:49",
+  "last_updated": "2026-08-18 20:07:32",
   "data": [
     {
       "구분": "광주지방 식약청",
@@ -17,14 +17,6 @@
           "URL": "https://www.mfds.go.kr/brd/m_875/down.do?brd_id=rgn0003&seq=46016&data_tp=A&file_seq=2"
         }
       ]
-    },
-    {
-      "구분": "대한화장품협회",
-      "제목": "중국국가시장감독관리총국, 「GB 7916-2026 화장품 안전 일반 요구사항」 승인",
-      "등록일": "2026-08-18",
-      "URL": "https://kcia.or.kr/home/notice/notice.php?type=view&no=17801&ss=page%3D1%26skind%3D%26sword%3D%26ob%3D",
-      "상세내용": "2026년 7월 30일 중국국가시장감독관리총국, 「GB 7916-2026 화장품 안전 일반 요구사항」을 승인하였습니다.\n해당 표준은 기존 「GB 7916-1987」을 대체하며, 2028년 1월 1일부터 시행될 예정입니다.\n※ 현재 관련 문서는 아직 공포되지 않았습니다. 관련 주요내용은 아래 사항을 참조하시기 바랍니다.\n중국약품검정연구원,  강제성 국가표준 「화장품 안전 일반 요구사항」 해설\nhttps://www.nifdc.org.cn//nifdc/zxdt/zxdtweb/20260806171236168.html\n중국약품검정연구원,  화장품 신규 국가표준 오늘 발표 — 전문가가 해설하는 주요 변경사항\nhttps://www.nifdc.org.cn//nifdc/xxgk/zcfg/zcjd/20260806165140135.html",
-      "첨부파일": []
     },
     {
       "구분": "대한화장품협회",
@@ -70,6 +62,19 @@
         {
           "이름": "통보문.zip",
           "URL": "https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202608_178702739204900_1.zip&rename=%ED%86%B5%EB%B3%B4%EB%AC%B8.zip"
+        }
+      ]
+    },
+    {
+      "구분": "대한화장품협회",
+      "제목": "[TBT종합지원센터] 글로벌 화학물질 규제 동향 및 EU PPWR 대응방안 웨비나",
+      "등록일": "2026-08-18",
+      "URL": "https://kcia.or.kr/home/notice/notice.php?type=view&no=17805&ss=page%3D1%26skind%3D%26sword%3D%26ob%3D",
+      "상세내용": "",
+      "첨부파일": [
+        {
+          "이름": "[포스터] 글로벌 화학물질 규제 동향 및 EU PPWR 대응방안 웨비나.pdf",
+          "URL": "https://kcia.or.kr/inc/down.php?dir=BOARD&file_name=202608_178704436241071_1.pdf&rename=%5B%ED%8F%AC%EC%8A%A4%ED%84%B0%5D+%EA%B8%80%EB%A1%9C%EB%B2%8C+%ED%99%94%ED%95%99%EB%AC%BC%EC%A7%88+%EA%B7%9C%EC%A0%9C+%EB%8F%99%ED%96%A5+%EB%B0%8F+EU+PPWR+%EB%8C%80%EC%9D%91%EB%B0%A9%EC%95%88+%EC%9B%A8%EB%B9%84%EB%82%98.pdf"
         }
       ]
     },
