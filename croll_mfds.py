@@ -77,7 +77,9 @@ food_drug_urls = [
     {'url': 'https://www.mfds.go.kr/brd/m_857/list.do', '출처': '대구지방 식약청'},
     {'url': 'https://kcia.or.kr/home/notice/notice.php?page=1', '출처': '대한화장품협회'},
     {'url': 'https://www.mfds.go.kr/brd/m_1059/list.do', '출처': '식약처 공무원지침서'},
-    {'url': 'https://www.mfds.go.kr/brd/m_1060/list.do', '출처': '식약처 민원인안내서'}
+    {'url': 'https://www.mfds.go.kr/brd/m_1060/list.do', '출처': '식약처 민원인안내서'},
+    # 2026-10-05 추가 — 회수·적발·수출 실적 등 생활 밀착 소식(서류닷컴 Threads 「행정 뉴스」 소재). 시간예산 소진 시 상세만 생략되도록 맨 뒤에 둔다
+    {'url': 'https://www.mfds.go.kr/brd/m_99/list.do', '출처': '식약처 보도자료'}
 ]
 
 # 게시물을 저장할 리스트
@@ -315,7 +317,7 @@ def process_mfds(url, soup, source):
         # 상세 내용 크롤링 (식약청 지방청, 공무원지침서, 민원인안내서인 경우)
         detail_content = ""
         attachments = []
-        want_detail = any(region in source for region in ['서울', '경인', '부산', '대전', '광주', '대구', '공무원지침서', '민원인안내서'])
+        want_detail = any(region in source for region in ['서울', '경인', '부산', '대전', '광주', '대구', '공무원지침서', '민원인안내서', '보도자료'])
         if want_detail:
             if over_deadline():
                 skipped += 1  # 시간예산 초과: 상세는 생략하되 목록 정보는 보존
