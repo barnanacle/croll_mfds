@@ -453,6 +453,21 @@ if not df.empty:
 else:
     json_data = []
 
+# 짝 없는 서로게이트(첨부 PDF·HWPX 텍스트 추출에서 섞여 들어옴)는 UTF-8 로 저장할 수 없다.
+# 2026-10-21 '\udfb6' 한 글자 때문에 저장이 실패해 빈 data.json 이 커밋된 사고 — 모든 문자열에서 걷어낸다.
+_SURROGATE = re.compile('[\ud800-\udfff]')
+
+def _strip_surrogates(v):
+    if isinstance(v, str):
+        return _SURROGATE.sub('', v)
+    if isinstance(v, list):
+        return [_strip_surrogates(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _strip_surrogates(x) for k, x in v.items()}
+    return v
+
+json_data = _strip_surrogates(json_data)
+
 try:
     new_count = len(json_data)
 
@@ -479,8 +494,13 @@ try:
             "data": json_data
         }
         json_str = json.dumps(data_json, ensure_ascii=False, indent=2)
-        with open('data.json', 'w', encoding='utf-8') as f:
-            f.write(json_str)
+        # 원자적 저장 — 임시 파일에 다 쓰고 다시 읽어 확인한 뒤에만 바꿔 끼운다.
+        # 쓰는 도중 실패해도 기존 data.json 은 그대로 남는다(빈 파일이 커밋되지 않게).
+        json_bytes = json_str.encode('utf-8')
+        assert len(json.loads(json_bytes.decode('utf-8')).get('data', [])) == new_count
+        with open('data.json.tmp', 'wb') as f:
+            f.write(json_bytes)
+        os.replace('data.json.tmp', 'data.json')
 
         print(f"\n크롤링 완료!", flush=True)
         print(f"총 게시글 수: {new_count}", flush=True)

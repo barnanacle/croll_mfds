@@ -94,6 +94,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # data.json 이 비었거나 깨졌으면 커밋하지 않고 되돌린다(2026-10-21 빈 파일 커밋 사고 재발 방지)
+          if ! python3 -c "import json,sys; d=json.load(open('data.json',encoding='utf-8')); sys.exit(0 if d.get('data') else 1)"; then
+            echo "::error::data.json 이 비었거나 JSON 이 아님 — 커밋하지 않고 되돌림"
+            git checkout -- data.json
+          fi
           git add data.json crawl_log.txt
 
           if git diff --staged --quiet; then
@@ -181,6 +186,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # data.json 이 비었거나 깨졌으면 커밋하지 않고 되돌린다(2026-10-21 빈 파일 커밋 사고 재발 방지)
+          if ! python3 -c "import json,sys; d=json.load(open('data.json',encoding='utf-8')); sys.exit(0 if d.get('data') else 1)"; then
+            echo "::error::data.json 이 비었거나 JSON 이 아님 — 커밋하지 않고 되돌림"
+            git checkout -- data.json
+          fi
           git add data.json crawl_log.txt
 
           if git diff --staged --quiet; then
